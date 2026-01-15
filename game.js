@@ -192,10 +192,7 @@ class BootScene extends Phaser.Scene {
         // アセット生成
         this.createGameAssets();
 
-        // BGMロード（存在する場合）
-        this.load.audio('bgm', ['assets/bgm.mp3']);
-
-        // ボイスファイルをロード
+        // ボイスファイルをロード（BGMはWeb Audio APIで生成するため不要）
         this.load.audio('voice_start', ['assets/start.mp3']);
         this.load.audio('voice_combo', ['assets/combo.mp3']);
         this.load.audio('voice_gameover', ['assets/gameover.mp3']);
@@ -409,17 +406,10 @@ class TitleScene extends Phaser.Scene {
 
     playBGM() {
         try {
-            // まずファイルベースのBGMを試す
-            if (this.cache.audio.exists('bgm')) {
-                const bgm = this.sound.add('bgm', { loop: true, volume: 0.4 });
-                bgm.play();
-            } else {
-                // フォールバック: Web Audio APIで8-bit BGMを生成
-                BGMGenerator.playMelody();
-            }
-        } catch (e) {
-            console.log('BGM not available, using generated melody');
+            // Web Audio APIで8-bit BGMを生成
             BGMGenerator.playMelody();
+        } catch (e) {
+            console.log('BGM not available');
         }
     }
 
