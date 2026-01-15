@@ -49,6 +49,132 @@ const VOICE_MESSAGES = {
 };
 
 // ============================================
+// ランキングシステム
+// ============================================
+const RankingSystem = {
+    MAX_RANKINGS: 5,
+    STORAGE_KEY: 'cakeTowerRankings',
+
+    getRankings() {
+        try {
+            const data = localStorage.getItem(this.STORAGE_KEY);
+            return data ? JSON.parse(data) : [];
+        } catch {
+            return [];
+        }
+    },
+
+    addScore(score) {
+        const rankings = this.getRankings();
+        const now = new Date();
+        const entry = {
+            score: score,
+            date: now.toLocaleDateString('ja-JP'),
+            time: now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        };
+
+        rankings.push(entry);
+        rankings.sort((a, b) => b.score - a.score);
+        const topRankings = rankings.slice(0, this.MAX_RANKINGS);
+
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(topRankings));
+
+        // ハイスコアも更新
+        const highScore = parseInt(localStorage.getItem('cakeTowerHighScore') || '0');
+        if (score > highScore) {
+            localStorage.setItem('cakeTowerHighScore', score.toString());
+        }
+
+        return topRankings.findIndex(r => r.score === score && r.date === entry.date && r.time === entry.time) + 1;
+    },
+
+    isNewHighScore(score) {
+        const rankings = this.getRankings();
+        if (rankings.length < this.MAX_RANKINGS) return true;
+        return score > rankings[rankings.length - 1].score;
+    }
+};
+
+// ============================================
+// 8-bit BGM 生成器（Web Audio API）
+// ============================================
+const BGMGenerator = {
+    audioContext: null,
+    isPlaying: false,
+    oscillators: [],
+    gainNode: null,
+
+    init() {
+        if (!this.audioContext) {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.gainNode = this.audioContext.createGain();
+            this.gainNode.connect(this.audioContext.destination);
+            this.gainNode.gain.value = 0.15;
+        }
+    },
+
+    playNote(frequency, duration, delay = 0) {
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+
+        osc.type = 'square';
+        osc.frequency.value = frequency;
+        osc.connect(gain);
+        gain.connect(this.gainNode);
+
+        const now = this.audioContext.currentTime + delay;
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+        osc.start(now);
+        osc.stop(now + duration);
+
+        return osc;
+    },
+
+    playMelody() {
+        if (this.isPlaying) return;
+        this.init();
+        this.isPlaying = true;
+
+        // 8-bit風メロディ
+        const notes = [
+            { freq: 523.25, dur: 0.15 }, // C5
+            { freq: 659.25, dur: 0.15 }, // E5
+            { freq: 783.99, dur: 0.15 }, // G5
+            { freq: 1046.50, dur: 0.3 }, // C6
+            { freq: 783.99, dur: 0.15 }, // G5
+            { freq: 659.25, dur: 0.15 }, // E5
+            { freq: 523.25, dur: 0.3 },  // C5
+            { freq: 587.33, dur: 0.15 }, // D5
+            { freq: 698.46, dur: 0.15 }, // F5
+            { freq: 880.00, dur: 0.3 },  // A5
+            { freq: 783.99, dur: 0.15 }, // G5
+            { freq: 659.25, dur: 0.3 },  // E5
+        ];
+
+        let time = 0;
+        const playLoop = () => {
+            if (!this.isPlaying) return;
+
+            notes.forEach((note, i) => {
+                this.playNote(note.freq, note.dur, time);
+                time += note.dur + 0.05;
+            });
+
+            setTimeout(playLoop, time * 1000);
+            time = 0;
+        };
+
+        playLoop();
+    },
+
+    stop() {
+        this.isPlaying = false;
+    }
+};
+
+// ============================================
 // BootScene - 初期ロード
 // ============================================
 class BootScene extends Phaser.Scene {
@@ -283,12 +409,17 @@ class TitleScene extends Phaser.Scene {
 
     playBGM() {
         try {
-            if (this.sound.get('bgm')) {
-                const bgm = this.sound.add('bgm', { loop: true, volume: 0.5 });
+            // まずファイルベースのBGMを試す
+            if (this.cache.audio.exists('bgm')) {
+                const bgm = this.sound.add('bgm', { loop: true, volume: 0.4 });
                 bgm.play();
+            } else {
+                // フォールバック: Web Audio APIで8-bit BGMを生成
+                BGMGenerator.playMelody();
             }
         } catch (e) {
-            console.log('BGM not available');
+            console.log('BGM not available, using generated melody');
+            BGMGenerator.playMelody();
         }
     }
 
@@ -1105,18 +1236,21 @@ class GameScene extends Phaser.Scene {
             });
         }
 
+        // ランキングにスコアを登録
+        const rank = RankingSystem.addScore(this.score);
         const highScore = parseInt(localStorage.getItem('cakeTowerHighScore') || '0');
-        const isNewRecord = this.score > highScore;
+        const isNewRecord = this.score >= highScore;
 
-        if (isNewRecord) {
-            localStorage.setItem('cakeTowerHighScore', this.score.toString());
-        }
+        // BGMを停止
+        BGMGenerator.stop();
 
         this.time.delayedCall(1500, () => {
             this.scene.start('ResultScene', {
                 score: this.score,
                 isNewRecord: isNewRecord,
-                highScore: Math.max(this.score, highScore)
+                highScore: Math.max(this.score, highScore),
+                rank: rank,
+                rankings: RankingSystem.getRankings()
             });
         });
     }
@@ -1134,6 +1268,8 @@ class ResultScene extends Phaser.Scene {
         this.finalScore = data.score || 0;
         this.isNewRecord = data.isNewRecord || false;
         this.highScore = data.highScore || 0;
+        this.rank = data.rank || 0;
+        this.rankings = data.rankings || [];
     }
 
     create() {
@@ -1152,11 +1288,64 @@ class ResultScene extends Phaser.Scene {
             this.createCelebration(width, height);
         }
 
-        // 結果カード
+        // 結果カード（コンパクト版）
         this.createResultCard(width, height);
+
+        // ランキング表示
+        this.createRankingDisplay(width, height);
 
         // ボタン
         this.createButtons(width, height);
+    }
+
+    createRankingDisplay(width, height) {
+        const container = this.add.container(width / 2, height * 0.44);
+
+        // ランキングカード背景
+        const cardBg = this.add.graphics();
+        cardBg.fillStyle(0xFFFFFF, 0.85);
+        cardBg.fillRoundedRect(-180, -15, 360, 140, 15);
+        cardBg.lineStyle(2, 0xFFD700, 0.8);
+        cardBg.strokeRoundedRect(-180, -15, 360, 140, 15);
+        container.add(cardBg);
+
+        // タイトル
+        const title = this.add.text(0, 0, '🏆 ランキング TOP 5', {
+            fontFamily: 'M PLUS Rounded 1c',
+            fontSize: '20px',
+            fontStyle: 'bold',
+            color: '#E75480'
+        }).setOrigin(0.5);
+        container.add(title);
+
+        // ランキングリスト
+        const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+        this.rankings.forEach((entry, index) => {
+            const y = 28 + index * 22;
+            const isCurrentScore = index === this.rank - 1;
+
+            const entryText = this.add.text(0, y,
+                `${medals[index]} ${entry.score}段`, {
+                fontFamily: 'M PLUS Rounded 1c',
+                fontSize: isCurrentScore ? '18px' : '16px',
+                fontStyle: isCurrentScore ? 'bold' : 'normal',
+                color: isCurrentScore ? '#FFD700' : '#C14679'
+            }).setOrigin(0.5);
+
+            if (isCurrentScore) {
+                // 現在のスコアをハイライト
+                this.tweens.add({
+                    targets: entryText,
+                    scaleX: 1.1,
+                    scaleY: 1.1,
+                    duration: 500,
+                    yoyo: true,
+                    repeat: -1
+                });
+            }
+
+            container.add(entryText);
+        });
     }
 
     createCelebration(width, height) {
@@ -1205,22 +1394,22 @@ class ResultScene extends Phaser.Scene {
     }
 
     createResultCard(width, height) {
-        // カード背景
+        // カード背景（コンパクト版）
         const card = this.add.graphics();
         card.fillStyle(0xFFFFFF, 0.9);
-        card.fillRoundedRect(width / 2 - 260, height * 0.15, 520, 450, 30);
+        card.fillRoundedRect(width / 2 - 260, height * 0.08, 520, 280, 30);
         card.lineStyle(4, 0xE75480, 0.8);
-        card.strokeRoundedRect(width / 2 - 260, height * 0.15, 520, 450, 30);
+        card.strokeRoundedRect(width / 2 - 260, height * 0.08, 520, 280, 30);
 
         // タイトル
         const titleText = this.isNewRecord ? '🎉 NEW RECORD! 🎉' : '🍰 ゲームオーバー';
-        const title = this.add.text(width / 2, height * 0.22, titleText, {
+        const title = this.add.text(width / 2, height * 0.12, titleText, {
             fontFamily: 'M PLUS Rounded 1c',
-            fontSize: this.isNewRecord ? '44px' : '48px',
+            fontSize: this.isNewRecord ? '38px' : '42px',
             fontStyle: 'bold',
             color: this.isNewRecord ? '#FFD700' : '#E75480',
             stroke: '#FFFFFF',
-            strokeThickness: 6,
+            strokeThickness: 5,
             shadow: { offsetX: 2, offsetY: 2, color: this.isNewRecord ? '#E75480' : '#C14679', blur: 8, fill: true }
         }).setOrigin(0.5);
 
@@ -1235,62 +1424,52 @@ class ResultScene extends Phaser.Scene {
             });
         }
 
-        // ケーキタワー表示
-        const cakeDisplay = this.add.container(width / 2, height * 0.35);
-        for (let i = 0; i < Math.min(5, this.finalScore); i++) {
-            const cake = this.add.text(0, -i * 25, '🍰', { fontSize: '50px' }).setOrigin(0.5);
-            cakeDisplay.add(cake);
-        }
-        if (this.finalScore > 5) {
-            const more = this.add.text(0, -130, `+${this.finalScore - 5}`, {
-                fontFamily: 'M PLUS Rounded 1c',
-                fontSize: '24px',
-                color: '#E75480'
-            }).setOrigin(0.5);
-            cakeDisplay.add(more);
-        }
-
         // スコア
-        this.add.text(width / 2, height * 0.47, `${this.finalScore}段`, {
+        this.add.text(width / 2, height * 0.22, `${this.finalScore}段`, {
             fontFamily: 'M PLUS Rounded 1c',
-            fontSize: '88px',
+            fontSize: '72px',
             fontStyle: 'bold',
             color: '#E75480',
             stroke: '#FFFFFF',
-            strokeThickness: 8,
-            shadow: { offsetX: 3, offsetY: 3, color: '#FFB5C5', blur: 15, fill: true }
+            strokeThickness: 6,
+            shadow: { offsetX: 3, offsetY: 3, color: '#FFB5C5', blur: 12, fill: true }
         }).setOrigin(0.5);
 
-        // ベストスコア
-        this.add.text(width / 2, height * 0.55, `🏆 ベスト: ${this.highScore}段`, {
-            fontFamily: 'M PLUS Rounded 1c',
-            fontSize: '28px',
-            fontStyle: 'bold',
-            color: '#C14679'
-        }).setOrigin(0.5);
-
-        // 評価
+        // ベストスコア & 評価
         const rating = this.getRating();
-        this.add.text(width / 2, height * 0.61, rating, {
+        this.add.text(width / 2, height * 0.30, `${rating}`, {
             fontFamily: 'M PLUS Rounded 1c',
-            fontSize: '26px',
+            fontSize: '22px',
             fontStyle: 'bold',
             color: '#FFD700',
             stroke: '#FFFFFF',
-            strokeThickness: 3
+            strokeThickness: 2
         }).setOrigin(0.5);
     }
 
     createButtons(width, height) {
         // リトライボタン
-        this.createButton(width / 2, height * 0.74, '🔄 もう一度', 0xE75480, () => {
+        this.createButton(width / 2, height * 0.70, '🔄 もう一度', 0xE75480, () => {
             this.scene.start('GameScene');
         });
 
+        // Twitterシェアボタン
+        this.createButton(width / 2, height * 0.80, '🐦 シェア', 0x1DA1F2, () => {
+            this.shareToTwitter();
+        });
+
         // タイトルボタン
-        this.createButton(width / 2, height * 0.84, '🏠 タイトルへ', 0xFFFFFF, () => {
+        this.createButton(width / 2, height * 0.90, '🏠 タイトルへ', 0xFFFFFF, () => {
             this.scene.start('TitleScene');
         }, true);
+    }
+
+    shareToTwitter() {
+        const rating = this.getRating();
+        const text = `🍰 ケーキタワー・チャレンジで${this.finalScore}段達成！\n${rating}\n\n#ケーキタワー #ハイパーカジュアル`;
+        const url = 'https://toraji93-boop.github.io/cake-tower-game/';
+        const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+        window.open(twitterUrl, '_blank');
     }
 
     createButton(x, y, text, color, callback, isSecondary = false) {
