@@ -68,8 +68,14 @@ class BootScene extends Phaser.Scene {
 
         // BGMロード（存在する場合）
         this.load.audio('bgm', ['assets/bgm.mp3']);
-        this.load.on('loaderror', () => {
-            console.log('BGM not found, continuing without music');
+
+        // ボイスファイルをロード
+        this.load.audio('voice_start', ['assets/start.mp3']);
+        this.load.audio('voice_combo', ['assets/combo.mp3']);
+        this.load.audio('voice_gameover', ['assets/gameover.mp3']);
+
+        this.load.on('loaderror', (file) => {
+            console.log(`Audio not found: ${file.key}, continuing without it`);
         });
     }
 
@@ -604,6 +610,19 @@ class GameScene extends Phaser.Scene {
 
         // 入力
         this.input.on('pointerdown', this.onTap, this);
+
+        // スタートボイス再生
+        this.playVoice('voice_start');
+    }
+
+    playVoice(key) {
+        try {
+            if (this.cache.audio.exists(key)) {
+                this.sound.play(key, { volume: 0.8 });
+            }
+        } catch (e) {
+            console.log(`Voice ${key} not available`);
+        }
     }
 
     createBackground(width, height) {
@@ -888,6 +907,8 @@ class GameScene extends Phaser.Scene {
             if (this.perfectCombo >= 5) {
                 this.comboParticles.setPosition(dropX, this.swingingCake.y);
                 this.comboParticles.explode(10);
+                // コンボボイス再生
+                this.playVoice('voice_combo');
             }
         }
 
@@ -1055,6 +1076,9 @@ class GameScene extends Phaser.Scene {
         this.gameOver = true;
 
         this.showVoiceMessage(Phaser.Utils.Array.GetRandom(VOICE_MESSAGES.gameOver));
+
+        // ゲームオーバーボイス再生
+        this.playVoice('voice_gameover');
 
         // 崩壊アニメーション
         this.cakeStack.forEach((cake, index) => {
